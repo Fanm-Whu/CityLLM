@@ -144,12 +144,12 @@ class TestInterParserAgent:
                 print("时间列表长度错误，应为2")
                 return False
         if result.location is not None:  # 地点验证（如果存在）
-            if not isinstance(result.location, str):
-                print("地点格式错误，应为字符串")
+            if not isinstance(result.location, list):
+                print("地点格式错误，应为列表")
                 return False
         if result.data_requirement is not None:  # 数据需求验证（如果存在）
-            if not isinstance(result.data_requirement, str):
-                print("数据需求格式错误，应为字符串")
+            if not isinstance(result.data_requirement, list):
+                print("数据需求格式错误，应为列表")
                 return False
         return True
     

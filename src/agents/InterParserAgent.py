@@ -20,15 +20,15 @@ load_dotenv()  # 加载环境变量
 
 
 """
-@class: LandUseQuery
+@class: InterPaserResult
 @brief: 土地查询解析结果数据模型
     包含时间、地点、数据需求和原始输入四个字段
 """
 class InterPaserResult(BaseModel):
     """土地查询解析结果"""
     time: Optional[List[str]] = Field(description="时间信息，格式为['起始年份', '结束年份']，如果只有一个年份则起始和结束相同")
-    location: Optional[str] = Field(description="地点信息，城市名称")
-    data_requirement: Optional[str] = Field(description="具体的数据需求描述")
+    location: Optional[list[str]] = Field(description="地点信息，城市名称")
+    data_requirement: Optional[List[str]] = Field(description="具体的数据需求列表，可以包含多个需求")
     original_input: str = Field(description="原始输入语句")
 
 
@@ -65,19 +65,31 @@ class InterParserAgent:
         你是一个专业的城市土地数据查询解析器。你的任务只是分析用户输入，提取以下四个关键信息：
         
         1. **时间**：识别查询的时间范围，格式为['起始年份', '结束年份']
-           - 如果用户说"近5年"，计算为当前年份-4到当前年份
+           - 如果用户说"近5年"则以当前年份为基准计算，如2025年则为['2020', '2025']
+           - 如果用户给出具体年份范围，如"2015-2020年"则提取为['2015', '2020']
            - 如果只有一个年份，起始和结束年份相同
-           - 如果没指定时间，设为None
+           - 如果没指定时间设为None
         
         2. **地点**：识别查询的城市名称
-           - 优先提取地级市以上城市名称
+           - 优先提取地级市以上城市名称或重要区域名称（如"粤港澳大湾区"、"长三角"等）
            - 支持简称如"京"代表北京，"沪"代表上海
-           - 如果没指定地点，设为None
+           - 如果没指定地点设为None
         
         3. **数据需求**：描述用户具体需要什么土地数据
-           - 土地数据关键词：土地利用、土地覆盖、耕地、建设用地、林地、草地、水域、城市扩张、土地变化、土地类型、土地面积等
-           - 遥感数据关键词：遥感影像、卫星图像、NDVI、植被指数等
-           - 如果没明确数据需求，设为None
+           - **核心土地数据需求**：城市扩张、土地利用变化、土地覆盖、耕地变化、建设用地变化等
+           - **数据类型/方法**：卫星影像、遥感数据、NDVI、植被指数等
+           - **重要规则**：
+             * 当用户请求多个数据时，全部提取到列表中
+             * 区分核心需求与技术方法，优先将核心土地需求作为数据需求
+             * 如果技术方法是用户明确请求的数据（如"植被指数数据"），则也包含在数据需求中
+             * 当同时提到土地主题和技术方法时，优先将土地主题作为数据需求
+           - 示例：
+             * "城市扩张卫星影像分析" → 数据需求: ["城市扩张"]
+             * "耕地NDVI变化" → 数据需求: ["耕地变化"]
+             * "土地利用数据和植被指数数据" → 数据需求: ["土地利用", "植被指数"]
+             * "城市扩张和耕地变化监测" → 数据需求: ["城市扩张", "耕地变化"]
+             * "基于遥感影像的土地利用分析" → 数据需求: ["土地利用"]
+           - 如果没明确数据需求设为None
         
         4. **原始输入**：完整的用户输入语句
         
@@ -92,7 +104,7 @@ class InterParserAgent:
     """
     @brief: 解析用户输入的自然语言，提取四个关键信息
     @param strUserInput: 用户输入的自然语言
-    @return: LandUseQuery 解析后的结构化数据，包含时间、地点、数据需求和原始输入
+    @return: InterPaserResult 解析后的结构化数据，包含时间、地点、数据需求和原始输入
     @note: 时间复杂度: O(1)，其中1是API调用次数
             空间复杂度: O(n)，其中n是输入字符串长度
     """
@@ -105,8 +117,6 @@ class InterParserAgent:
             response = self.mLlm.invoke(listMessages)
             objResult = self.mParser.parse(response.content)  # 尝试解析响应
             objResult.original_input = strUserInput
-            if objResult.time and isinstance(objResult.time, list):  # 后处理：确保时间格式正确
-                objResult.time = self._listNormalizeTime(objResult.time)
             return objResult
             
         except Exception as e:  # 检查是否是认证错误
@@ -117,60 +127,6 @@ class InterParserAgent:
                 raise Exception("API请求超时，请检查网络连接")
             else:
                 raise Exception(f"API调用失败: {error_msg}")
-    
-
-    """
-    @brief: 标准化时间格式
-    @param listTime: 时间列表，格式为['起始年份', '结束年份']
-    @return: 标准化后的时间列表，如果格式无效则返回None
-    @note: 时间复杂度: O(1)
-            空间复杂度: O(1)
-    """
-    def _listNormalizeTime(self, listTime: List[str]) -> List[str]:
-        if not listTime or len(listTime) < 2:
-            return None
-        strStartYear = str(listTime[0]).strip()  # 处理各种时间格式
-        strEndYear = str(listTime[1]).strip()
-        
-        if "近" in strStartYear or "近" in strEndYear:  # 处理"近X年"的情况
-            return self._handleRecentYears(strStartYear + strEndYear)
-        strStartYear = self._extractYear(strStartYear)  # 提取数字年份
-        strEndYear = self._extractYear(strEndYear)
-
-        if not strStartYear or not strEndYear:
-            return None
-        # 年份验证（1900-2100之间）
-        if (strStartYear.isdigit() and strEndYear.isdigit() and 1900 <= int(strStartYear) <= 2100 and 1900 <= int(strEndYear) <= 2100):
-            return [strStartYear, strEndYear]
-        return None
-
-
-    """
-    @brief: 从字符串中提取年份
-    @param strTime: 时间字符串
-    @return: 提取的年份字符串，如果未找到则返回None
-    """
-    def _extractYear(self, strTime: str) -> Optional[str]:
-        match = re.search(r'\b(19|20)\d{2}\b', str(strTime))  # 匹配4位数字的年份
-        if match:
-            return match.group()
-        return None
-
-
-    """
-    @brief: 处理"近X年"的时间表达
-    @param strUserInput: 用户输入
-    @return: 计算后的时间范围
-    """
-    def _handleRecentYears(self, strUserInput: str) -> List[str]:
-        match = re.search(r'近(\d+)年', strUserInput)  # 匹配"近X年"的模式
-        if match:
-            years = int(match.group(1))
-            from datetime import datetime
-            current_year = datetime.now().year
-            start_year = current_year - years + 1
-            return [str(start_year), str(current_year)]
-        return None
 
 
 """
@@ -213,12 +169,15 @@ def main():
             print(f"🔍 开始解析用户输入: {strUserInput}")
             
             try:
-                objResult = objParser.objParseQuery(strUserInput)# 解析查询
+                objResult = objParser.objParseQuery(strUserInput)  # 解析查询
                 print()
                 print("解析结果:")
                 print(f"   时间: {objResult.time}")
                 print(f"   地点: {objResult.location}")
-                print(f"   数据需求: {objResult.data_requirement}")
+                if objResult.data_requirement:
+                    print(f"   数据需求: {', '.join(objResult.data_requirement)}")
+                else:
+                    print(f"   数据需求: None")
                 print(f"   原始输入: {objResult.original_input}")
             
                 print()
@@ -244,5 +203,6 @@ def main():
 def objCreateLandUseParser():
     return InterParserAgent()
 
-if __name__ == "__main__": # 直接运行此文件时启动命令行交互界面
+
+if __name__ == "__main__":  # 直接运行此文件时启动命令行交互界面
     main()
