@@ -1,31 +1,26 @@
 """
-@file: linterParserAgent.py
-@brief: 基于 DeepSeek 的城市土地查询解析器
+@file: InterParserAgent.py
+@brief: 用户输入解析文件，包括InterParserResult类、InterParserAgent类
 @author: 许锦辉
 @date: start: 2025-10-20; end: 2025-11-10
-@version: 1.1
+       start: 2025-11-13; end: 2025-11-13
+       start: 2025-11-14; end: 2025-11-14
+       start: 2025-11-16; end: 2025-11-18
+@version: 2.1 (升级到LangChain 1.0，增强多要素识别)
 """
-
-import os
-from dotenv import load_dotenv
-from langchain.schema import SystemMessage, HumanMessage
-from langchain.chat_models import init_chat_model
-from langchain.output_parsers import PydanticOutputParser
+from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from pydantic import BaseModel, Field
 from typing import List, Optional
-import re
-import json
-
-load_dotenv()  # 加载环境变量
 
 
 """
 @class: InterPaserResult
-@brief: 土地查询解析结果数据模型
-    包含时间、地点、数据需求和原始输入四个字段
+@brief: 用户输入解析结果数据模型类
+        包含时间、地点、数据需求和原始输入四个字段
+@see: 是InterParserAgent的辅助类
 """
-class InterPaserResult(BaseModel):
-    """土地查询解析结果"""
+class InterParserResult(BaseModel):
     time: Optional[List[str]] = Field(description="时间信息，格式为['起始年份', '结束年份']，如果只有一个年份则起始和结束相同")
     location: Optional[list[str]] = Field(description="地点信息，城市名称")
     data_requirement: Optional[List[str]] = Field(description="具体的数据需求列表，可以包含多个需求")
@@ -34,175 +29,120 @@ class InterPaserResult(BaseModel):
 
 """
 @class: InterParserAgent
-@brief: DeepSeek 解析代理类
-    负责初始化模型和解析用户输入
+@brief: 用户输入解析类，负责解析用户输入
+@see: 使用了辅助类InterParserResult
 """
-class InterParserAgent:
+class InterParserAgent():
     """
-    @brief: 初始化 DeepSeek 解析代理
-    @throws: 当环境变量中未找到 DEEPSEEK_API_KEY 时抛出 ValueError
+    @brief: 初始化函数，初始化了2个变量:
+                mLlm: 使用的模型，接受外部参数
+                agent: Agent实例
+    @param inputBaseAgent: 输入的基模型，用该模型初始化
     """
-    def __init__(self):  
-        self.mStrApiKey = os.getenv("DEEPSEEK_API_KEY")  # 从环境变量获取 DeepSeek API 密钥
-        if not self.mStrApiKey:
-            raise ValueError("未找到 DEEPSEEK_API_KEY 环境变量，请检查 .env 文件")
-        
-        try:
-            self.mLlm = init_chat_model(   # 初始化 DeepSeek 模型 
-                model="deepseek-chat",
-                model_provider="deepseek", 
-                api_key=self.mStrApiKey,
-                temperature=0,
-                max_tokens=1024,
-                timeout=30
-            )
-        except Exception as e:
-            raise ValueError(f"模型初始化失败: {e}")
-            
-        self.mParser = PydanticOutputParser(pydantic_object=InterPaserResult)
-        # 构建系统提示词 
-        self.mSystemMessage = SystemMessage(content=f"""
+    def __init__(self, inputBaseAgent):  
+        self.mLlm = inputBaseAgent.mLlm
+        self.mAgent = self.agentInit()
+    
+    """
+    @brief: 初始化LangChain 1.0版本的Agent
+    @return: 配置好的Agent实例
+    @note: 使用ToolStrategy进行结构化输出，支持所有具备工具调用能力的模型
+    """
+    def agentInit(self):
+        # 构建系统提示词
+        system_prompt = """
         你是一个专业的城市土地数据查询解析器。你的任务只是分析用户输入，提取以下四个关键信息：
-        
-        1. **时间**：识别查询的时间范围，格式为['起始年份', '结束年份']
-           - 如果用户说"近5年"则以当前年份为基准计算，如2025年则为['2020', '2025']
-           - 如果用户给出具体年份范围，如"2015-2020年"则提取为['2015', '2020']
-           - 如果只有一个年份，起始和结束年份相同
-           - 如果没指定时间设为None
-        
+        1. **时间**：识别查询的时间范围，格式为['年份']
+           - 如果没指定时间设为None                             
         2. **地点**：识别查询的城市名称
-           - 优先提取地级市以上城市名称或重要区域名称（如"粤港澳大湾区"、"长三角"等）
-           - 支持简称如"京"代表北京，"沪"代表上海
+           - **行政级别标准化与格式规范**：
+             * **直辖市**：直接使用"北京市"、"上海市"、"天津市"、"重庆市"
+             * **地级市**：使用"省份+城市"格式，如"湖北省武汉市"、"江苏省南京市"、"广东省广州市"
+             * **省级单位**：直接使用"湖北省"、"广东省"、"江苏省"等
+             * **自治区**：使用"广西壮族自治区"、"新疆维吾尔自治区"等完整名称
+             * **特别行政区**：使用"香港特别行政区"、"澳门特别行政区"
+           - **特殊区域分解规则**：
+             * "粤港澳大湾区" → ["广东省", "香港特别行政区", "澳门特别行政区"]
+             * "长三角" / "长三角地区" → ["上海市", "江苏省", "浙江省", "安徽省"] 
+             * "京津冀" / "京津冀地区" → ["北京市", "天津市", "河北省"]
+             * "中部六省" → ["河南省", "湖北省", "湖南省", "安徽省", "江西省", "山西省"]
+             * "江浙沪" → ["江苏省", "浙江省", "上海市"]
+           - **简称标准化**：
+             * "京" → "北京市"，"沪" → "上海市"，"津" → "天津市"，"渝" → "重庆市"
+             * "粤" → "广东省"，"苏" → "江苏省"，"浙" → "浙江省"，"皖" → "安徽省"
+             * "鄂" → "湖北省"，"湘" → "湖南省"，"豫" → "河南省"，"赣" → "江西省"
+           - **格式示例**：
+             * "武汉" → "湖北省武汉市"
+             * "南京" → "江苏省南京市" 
+             * "成都" → "四川省成都市"
+             * "广州" → "广东省广州市"
+             * "深圳" → "广东省深圳市"
+             * "北京" → "北京市" (直辖市)
+             * "上海" → "上海市" (直辖市)
            - 如果没指定地点设为None
-        
-        3. **数据需求**：描述用户具体需要什么土地数据
-           - **核心土地数据需求**：城市扩张、土地利用变化、土地覆盖、耕地变化、建设用地变化等
-           - **数据类型/方法**：卫星影像、遥感数据、NDVI、植被指数等
+        3. **数据需求**：描述用户具体需要什么数据
+           - **核心土地数据需求**：城市扩张、土地利用、土地覆盖、耕地变化、建设用地变化等
+           - **驱动因素数据需求**：人口数据、经济数据、GDP、人口密度、经济增长等
+           - **其他数据需求**：卫星影像、遥感数据、NDVI、植被指数等
            - **重要规则**：
-             * 当用户请求多个数据时，全部提取到列表中
-             * 区分核心需求与技术方法，优先将核心土地需求作为数据需求
-             * 如果技术方法是用户明确请求的数据（如"植被指数数据"），则也包含在数据需求中
-             * 当同时提到土地主题和技术方法时，优先将土地主题作为数据需求
-           - 示例：
+             * 区分核心土地数据需求、驱动因素数据需求与其他数据需求，优先将核心土地需求和驱动因素需求作为数据需求
+             * 当用户明确请求其他数据（如"植被指数数据"）时，则也包含在数据需求中
+             * 对于模拟和预测任务，必须提取所有提到的驱动因素
+             * 如果用户的需求涉及城市功能区的模拟/预测, 在数据需求加入"土地利用"、"人口数据"、"经济数据", 同时数据需求中不得出现"城市功能区"
+             * 如果用户的需求只是单纯的要求展示城市功能区数据，则正常在数据需求加入"城市功能区"。
+           - **模拟预测场景示例**：
+             * "驱动人口、经济因素，模拟武汉市的土地利用情况" → 数据需求: ["人口数据", "经济数据", "土地利用"]
+             * "基于人口增长预测城市扩张" → 数据需求: ["人口数据", "城市扩张"]
+             * "考虑GDP和交通因素的土地利用模拟" → 数据需求: ["GDP数据", "交通数据", "土地利用"]
+             * "多情景耦合的城市土地利用模拟" → 数据需求: ["土地利用"]
+             * "人口驱动的耕地变化预测" → 数据需求: ["人口数据", "耕地变化"]
+           - **常规查询示例**：
              * "城市扩张卫星影像分析" → 数据需求: ["城市扩张"]
              * "耕地NDVI变化" → 数据需求: ["耕地变化"]
              * "土地利用数据和植被指数数据" → 数据需求: ["土地利用", "植被指数"]
              * "城市扩张和耕地变化监测" → 数据需求: ["城市扩张", "耕地变化"]
              * "基于遥感影像的土地利用分析" → 数据需求: ["土地利用"]
            - 如果没明确数据需求设为None
-        
-        4. **原始输入**：完整的用户输入语句
-        
+        4. **原始输入**：完整的用户原始输入语句
         重要说明：
         - 你只需要解析这四个字段，不要回答用户的问题
         - 不要添加任何解释或额外内容
-        - 必须严格按照指定JSON格式输出
-        {self.mParser.get_format_instructions()}
-        """)
-    
+        - 必须严格按照指定的结构化格式输出
+        - **特别注意**：对于包含"驱动"、"模拟"、"预测"、"因素"等关键词的查询，要仔细识别所有相关数据需求"""
+        empty_tools = []# 创建空工具列表
+        # 创建Agent实例
+        agent = create_agent(
+            model=self.mLlm,
+            tools=empty_tools,
+            system_prompt=system_prompt,
+            response_format=ToolStrategy(# 使用ToolStrategy进行结构化输出
+              schema=InterParserResult,
+              handle_errors=True  # 启用错误处理和重试
+            )
+        )
+        return agent
 
     """
     @brief: 解析用户输入的自然语言，提取四个关键信息
     @param strUserInput: 用户输入的自然语言
-    @return: InterPaserResult 解析后的结构化数据，包含时间、地点、数据需求和原始输入
-    @note: 时间复杂度: O(1)，其中1是API调用次数
-            空间复杂度: O(n)，其中n是输入字符串长度
+    @return: InterPaserResult的对象，解析后的结构化数据，包含时间、地点、数据需求和原始输入
+    @note: 使用LangChain 1.0的Agent invoke方法，直接从structured_response获取结果
     """
-    def objParseQuery(self, strUserInput: str) -> InterPaserResult:
+    def run(self, strUserInput: str) -> InterParserResult:
         try:
-            listMessages = [  # 构建消息
-                self.mSystemMessage,
-                HumanMessage(content=f"请解析以下用户输入：{strUserInput}")
-            ]
-            response = self.mLlm.invoke(listMessages)
-            objResult = self.mParser.parse(response.content)  # 尝试解析响应
-            objResult.original_input = strUserInput
+            response = self.mAgent.invoke(
+                {"messages": [{"role": "user", "content": f"请解析以下用户输入：{strUserInput}"}]}
+            )
+            objResult = response["structured_response"] # 直接从structured_response获取解析结果
+            objResult.original_input = strUserInput # 确保原始输入正确设置
             return objResult
-            
-        except Exception as e:  # 检查是否是认证错误
+        except Exception as e:
             error_msg = str(e)
             if "401" in error_msg or "Authentication" in error_msg or "invalid" in error_msg.lower():
                 raise Exception("API认证失败，请检查API密钥是否正确")
             elif "timeout" in error_msg.lower():
                 raise Exception("API请求超时，请检查网络连接")
+            elif "OUTPUT_PARSING_FAILURE" in error_msg:
+                raise Exception("模型输出解析失败，请检查提示词和模型兼容性")
             else:
                 raise Exception(f"API调用失败: {error_msg}")
-
-
-"""
-@brief: 主函数 - 命令行交互界面
-@return: 无
-@note: 时间复杂度: O(m)，其中m是用户输入的查询次数
-        空间复杂度: O(n)，其中n是单个查询的长度
-"""
-def main():
-    print("=" * 60)
-    print("       城市土地查询解析器 - InterParserAgent")
-    print("=" * 60)
-    print()
-
-    try:
-        objParser = InterParserAgent()
-        print("解析器初始化成功！")
-        print()
-        print("使用说明：")
-        print("输入任何查询，系统会解析时间、地点、数据需求和原始输入")
-        print("解析结果将传递给后续处理步骤")
-        print("输入 '退出' 或 'exit' 结束程序")
-        print()
-        print("示例：")
-        print(" 北京市2015-2020年土地利用变化")
-        print(" 上海市耕地面积统计")
-        print(" 近5年广州市城市扩张情况")
-        print(" 2023年深圳市建设用地分布")
-        print()
-        
-        while True:
-            print("-" * 40)
-            strUserInput = input("请输入您的查询: ").strip()
-            if strUserInput.lower() in ['退出', 'exit', 'quit']:
-                print("感谢使用！再见！")
-                break
-            if not strUserInput:
-                print("输入不能为空，请重新输入。")
-                continue
-            print(f"🔍 开始解析用户输入: {strUserInput}")
-            
-            try:
-                objResult = objParser.objParseQuery(strUserInput)  # 解析查询
-                print()
-                print("解析结果:")
-                print(f"   时间: {objResult.time}")
-                print(f"   地点: {objResult.location}")
-                if objResult.data_requirement:
-                    print(f"   数据需求: {', '.join(objResult.data_requirement)}")
-                else:
-                    print(f"   数据需求: None")
-                print(f"   原始输入: {objResult.original_input}")
-            
-                print()
-                print("提示: 这些解析结果已准备好传递给后续处理步骤")
-                print()
-            except Exception as e:
-                print(f"InterParserAgent解析过程中出现错误: {e}")
-                print("请检查：")
-    except ValueError as e:
-        print(f"agent初始化失败: {e}")
-        print("请检查：")
-        print("是否在 .env 文件中设置了 DEEPSEEK_API_KEY，格式是否正确")
-    except Exception as e:
-        print(f"用户语言解析运行出错: {e}")
-
-
-"""
-@brief: 创建并返回一个土地用途解析器实例
-@return: InterParserAgent 初始化的解析器实例
-@note: 时间复杂度: O(1)
-        空间复杂度: O(1)
-"""
-def objCreateLandUseParser():
-    return InterParserAgent()
-
-
-if __name__ == "__main__":  # 直接运行此文件时启动命令行交互界面
-    main()

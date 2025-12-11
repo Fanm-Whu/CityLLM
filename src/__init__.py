@@ -9,7 +9,7 @@
 # 包元数据
 __version__ = "1.0.0"
 __author__ = "许锦辉"
-__description__ = "CityLLM 项目核心模块"
+__description__ = "CityLLM 项目src模块"
 
 # 导入子包，使其可以通过 src 包直接访问
 from . import agents
@@ -19,6 +19,3 @@ from . import utils
 
 # 定义包的公开接口
 __all__ = ["agents", "algorithms", "ui", "utils"]
-
-# 包初始化日志
-print(f"初始化 CityLLM src 包 (版本 {__version__})")
