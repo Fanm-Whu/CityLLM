@@ -1,8 +1,9 @@
-*.code-workspace
-.env
 .claude
 .idea
+.vscode
+__pycache__/
 data/
 reference/
-__pycache__/
+.env
+*.code-workspace
 requirements.txt
