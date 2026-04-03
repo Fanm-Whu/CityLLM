@@ -18,7 +18,7 @@ load_dotenv()
 """
 class BaseAgent:
     """
-    @brief: 智能体基类初始化函数，提供统一的 LLM 初始化
+    @brief: 智能体基类初始化函数，提供统一的 LLM 初始化 
     @throw: 未找到DEEPSEEK_API_KEY、未能初始化mLlm时抛出错误
     """
     def __init__(self):
@@ -26,7 +26,6 @@ class BaseAgent:
         self.mStrApiKey = os.getenv("DEEPSEEK_API_KEY")
         if not self.mStrApiKey:
             raise ValueError("未找到 DEEPSEEK_API_KEY 环境变量，请检查 .env 文件")
-        
         #初始化模型
         try:
             self.mLlm = init_chat_model(

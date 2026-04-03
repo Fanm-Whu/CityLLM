@@ -1,4 +1,8 @@
 *.code-workspace
 .env
-DataDemandAgent.py
+.claude
+.idea
 data/
+reference/
+__pycache__/
+requirements.txt
