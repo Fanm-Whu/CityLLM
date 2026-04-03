@@ -24,9 +24,9 @@ import os
 class LandSimulator:
     """
     @brief: 初始化函数
-    @param strPreviousLandSimuResult: 上一期土地模拟结果路径（e.g., 2025土地功能模拟结果_自然.tif）
-    @param strPreviousPopSimuResult: 上一期人口模拟结果路径（e.g., final_allocated_population_2025自然.tif）
-    @param strPreviousGDPSimuResult: 上一期GDP模拟结果路径（e.g., final_allocated_gdp_2025自然.tif）
+    @param strPreviousLandSimuResult: 上一期土地模拟结果路径（e.g., land_2025_natural.tif）
+    @param strPreviousPopSimuResult: 上一期人口模拟结果路径（e.g., pop_2025_natural.tif）
+    @param strPreviousGDPSimuResult: 上一期GDP模拟结果路径（e.g., gdp_2025_natural.tif）
     @param nTargetYear: 本轮模拟的目标年份
     @param nScenario: 本轮模拟的发展态势（0-缓慢，1-自然，2-快速）
     """

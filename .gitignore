@@ -2,7 +2,6 @@
 .idea
 .vscode
 __pycache__/
-data/
 reference/
 .env
 *.code-workspace
