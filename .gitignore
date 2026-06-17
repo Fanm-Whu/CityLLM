@@ -1,0 +1,43 @@
+# IDE
+.idea
+.vscode
+*.code-workspace
+
+# Claude
+.claude
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# Node.js
+node_modules/
+frontend/dist/
+
+# Data directories
+data/
+backend/data/
+
+# GIS output / large files
+*.tif
+*.tiff
+*.shp
+*.shx
+*.dbf
+*.prj
+
+# Reference / misc
+reference/
+else/
+
+# OS
+.DS_Store
+Thumbs.db
